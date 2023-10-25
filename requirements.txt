@@ -1,0 +1,8 @@
+openai==0.27.8
+beautifulsoup4
+youtube_transcript_api
+pypdf2
+feedparser
+trafilatura
+googlesearch-python
+
