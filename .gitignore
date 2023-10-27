@@ -1,4 +1,5 @@
 .env
+results/*.md
 *.md
 !Readme.md
 

@@ -20,6 +20,16 @@ Researcher is a Python script that generates a list of search queries based on a
 3. Enter the query or problem you want to research.
 4. Wait for the script to generate a list of search queries and summaries of the web pages.
 
+## Options
+The script will take various flags to control limits and the like.  So you can pass:
+```
+--max-questions (default=10) Maximum number of questions to look up via google
+--max-results (default=5) Maximum number of results to return per question
+--max-page-size (default=8000) Maximum number of characters to send to the summary model
+--question-model (default="gpt-4") Model to use for generating questions
+--summary-model (default="gpt-3.5-turbo-16k") Model to use for generating summaries
+```
+
 ## Limitations
 By default the script will just use basic scraping of google - which is not great (and against their T&C's).  You will also likely get blocked
 by google if you run more than a couple of queries.  You can however sign up to https://serper.dev/ for free and get a fairly generous free
