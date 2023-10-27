@@ -20,6 +20,16 @@ Researcher is a Python script that generates a list of search queries based on a
 3. Enter the query or problem you want to research.
 4. Wait for the script to generate a list of search queries and summaries of the web pages.
 
+## Limitations
+By default the script will just use basic scraping of google - which is not great (and against their T&C's).  You will also likely get blocked
+by google if you run more than a couple of queries.  You can however sign up to https://serper.dev/ for free and get a fairly generous free
+number of queries to run against google (I'm not associated with them - just a handy/easy service).  Just set your API key before you run the script and it will automatically use your serper account.  Eg,
+```sh
+export SERPER_API_KEY=123ba......
+export OPENAI_API_KEY=sk-.....
+python main.py
+```
+
 ## Contributing
 
 Contributions are welcome! If you find a bug or have a feature request, please open an issue or submit a pull request.
