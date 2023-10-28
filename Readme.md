@@ -28,6 +28,7 @@ The script will take various flags to control limits and the like.  So you can p
 --max-page-size (default=8000) Maximum number of characters to send to the summary model
 --question-model (default="gpt-4") Model to use for generating questions
 --summary-model (default="gpt-3.5-turbo-16k") Model to use for generating summaries
+--num-threads (default=5) Number of questions to process in parallel (be careful of API limits!)
 ```
 
 ## Limitations
