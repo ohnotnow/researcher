@@ -29,6 +29,9 @@ The script will take various flags to control limits and the like.  So you can p
 --question-model (default="gpt-4") Model to use for generating questions
 --summary-model (default="gpt-3.5-turbo-16k") Model to use for generating summaries
 --num-threads (default=5) Number of questions to process in parallel (be careful of API limits!)
+--hurry (default=False) Shorthand for --question-model gpt-3.5-turbo --summary-model gpt-3.5-turbo --max-questions 5 --max-results 5  --max-page-size 2000 --num-threads 5
+--thorough (default=False) Shorthand for --question-model gpt-4 --summary-model gpt-3.5-turbo --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5
+--delux (default=False) Shorthand for --question-model gpt-4 --summary-model gpt-4 --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5
 ```
 
 ## Limitations
