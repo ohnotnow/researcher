@@ -97,6 +97,8 @@ def process_question(question, model, max_results, max_page_size):
     question = question.strip()
     print(f"\n(Searching for question: {question})\n")
     unwanted_domains = ['reddit.com', 'youtube.com', 'mattermost.com']
+    question_results = ""
+    tokens = 0
     for url in get_search_results(question, num_results=max_results):
         for domain in unwanted_domains:
             if domain in url:
@@ -121,18 +123,26 @@ def process_question(question, model, max_results, max_page_size):
             print(f"(Skipping {url} because it is a 403 Forbidden page.)")
             continue
 
+        page_text = page_text[:max_page_size]
+        temp_model = model
+        if len(page_text) < 3000 and '16k' in model:
+            print(f"(Using gpt-3.5-turbo for {url} as the page is short.)")
+            temp_model = 'gpt-3.5-turbo'
         with yaspin(text="(Calling OpenAI for summary)", spinner="dots", timer=True):
             response = get_openai_response(
-                model=model,
+                model=temp_model,
                 messages=[
                     {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a USERS text and providing a concise summary of it containing the main information contained in it with a focus on answering any points in the users question."},
-                    {"role": "user", "content": f"Hi, I am researching ''{question}''. Could you help by summarising anything useful in this text I have found? ''{page_text[:args.max_page_size]}''."},
+                    {"role": "user", "content": f"Hi, I am researching ''{question}''. Could you help by summarising anything useful in this text I have found? ''{page_text}''."},
                 ]
             )
         summary = response['choices'][0]['message']['content']
-        tokens = response['usage']['total_tokens']
+        tokens += response['usage']['total_tokens']
+        if temp_model != model:
+            tokens = round(tokens / 2) # Half the tokens used if we used the smaller model as it's 1/2 the cost
+        question_results = question_results + f"\n\n### {url}\n\n{summary}"
         sleep(1)
-        return summary, tokens
+    return question_results, tokens
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Whatever')
@@ -142,8 +152,29 @@ if __name__ == '__main__':
     parser.add_argument('--question-model', type=str, default="gpt-4", help='Model to use for generating questions')
     parser.add_argument('--summary-model', type=str, default="gpt-3.5-turbo-16k", help='Model to use for generating summaries')
     parser.add_argument('--num-threads', type=int, default=5, help='Number of questions to process in parallel')
+    parser.add_argument('--hurry', type=bool, default=False, help='Shorthand for --question-model gpt-3.5-turbo --summary-model gpt-3.5-turbo --max-questions 5 --max-results 2 --max-page-size 2000 --num-threads 5')
+    parser.add_argument('--thorough', type=bool, default=False, help='Shorthand for --question-model gpt-4 --summary-model gpt-3.5-turbo --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
+    parser.add_argument('--delux', type=bool, default=False, help='Shorthand for --question-model gpt-4 --summary-model gpt-4 --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
     # parser.add_argument('--quiet', type=bool, default=False, help='Don\'t log anything - just print the response')
     args = parser.parse_args()
+
+    if args.delux:
+        args.max_questions = 10
+        args.max_results = 10
+        args.max_page_size = 8000
+        args.num_threads = 5
+        args.question_model = "gpt-4"
+        args.summary_model = "gpt-4"
+    if args.thorough:
+        args.max_questions = 10
+        args.max_results = 10
+        args.max_page_size = 8000
+        args.num_threads = 5
+    if args.hurry:
+        args.max_questions = 5
+        args.max_results = 2
+        args.max_page_size = 1000
+        args.num_threads = 5
 
     total_tokens_used = 0
     total_token_cost = 0
@@ -198,15 +229,15 @@ if __name__ == '__main__':
         response = get_openai_response(
             model=args.summary_model,
             messages=[
-                {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a list of various summaries of a users findings about websites and providing a overall summary of it containing the main information contained in it."},
-                {"role": "user", "content": f"Could you give me an overall summary of my findings about ''{question}''? Findings :: {content}"},
+                {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a list of various summaries of a users findings about websites and providing a readable summary of it containing the main information contained in it."},
+                {"role": "user", "content": f"Could you extract the important points from my findings about ''{question}''? Please give a thorough summary and point out any key points. Findings :: {content}"},
             ],
             max_tokens=8000
         )
     summary = response['choices'][0]['message']['content']
     tokens = response['usage']['total_tokens']
     total_tokens_used += tokens
-    total_token_cost += get_token_price(tokens, args.summary_model, direction="output")
+    total_token_cost += get_token_price(total_tokens_used, args.summary_model, direction="output")
     file = open(filename, "a")
     tee_print(file, f'\n## Overall Summary')
     tee_print(file, summary)
