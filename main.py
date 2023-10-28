@@ -4,6 +4,7 @@ from time import sleep
 import pytz
 import requests
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor
 import openai
 from bs4 import BeautifulSoup
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -51,14 +52,15 @@ def tee_print(file, *args, **kwargs):
     print(*args, **kwargs)
     print(*args, **kwargs, file=file)
 
-def get_openai_response(model, messages):
+def get_openai_response(model, messages, max_tokens=1000):
     max_tries = 3
     tries = 0
     while tries < max_tries:
         try:
             return openai.ChatCompletion.create(
                 model=model,
-                messages=messages
+                messages=messages,
+                max_tokens=max_tokens,
             )
         except Exception as e:
             tries += 1
@@ -92,7 +94,45 @@ def get_search_results(query, num_results=5):
         return search(query, num_results=num_results)
 
 def process_question(question, model, max_results, max_page_size):
-    pass
+    question = question.strip()
+    print(f"\n(Searching for question: {question})\n")
+    unwanted_domains = ['reddit.com', 'youtube.com', 'mattermost.com']
+    for url in get_search_results(question, num_results=max_results):
+        for domain in unwanted_domains:
+            if domain in url:
+                print(f"(Skipping {url} because it is a {domain} we can't handle.)")
+                continue
+        page_text = None
+        try:
+            response = requests.get(url, timeout=30)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            page_text = soup.get_text(strip=True)
+        except Exception as e:
+            print(f"(Skipping {url} because of error: {e})")
+            continue
+
+        if not page_text:
+            print(f"(Skipping {url} because it has no text.)")
+            continue
+        if 'cloudflare' in page_text.lower() and 'cookies' in page_text.lower():
+            print(f"(Skipping {url} because it is a cloudflare cookie check page.)")
+            continue
+        if '403 Forbidden' in page_text.lower():
+            print(f"(Skipping {url} because it is a 403 Forbidden page.)")
+            continue
+
+        with yaspin(text="(Calling OpenAI for summary)", spinner="dots", timer=True):
+            response = get_openai_response(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a USERS text and providing a concise summary of it containing the main information contained in it with a focus on answering any points in the users question."},
+                    {"role": "user", "content": f"Hi, I am researching ''{question}''. Could you help by summarising anything useful in this text I have found? ''{page_text[:args.max_page_size]}''."},
+                ]
+            )
+        summary = response['choices'][0]['message']['content']
+        tokens = response['usage']['total_tokens']
+        sleep(1)
+        return summary, tokens
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Whatever')
@@ -101,6 +141,7 @@ if __name__ == '__main__':
     parser.add_argument('--max-page-size', type=int, default=8000, help='Maximum number of characters to send to the summary model')
     parser.add_argument('--question-model', type=str, default="gpt-4", help='Model to use for generating questions')
     parser.add_argument('--summary-model', type=str, default="gpt-3.5-turbo-16k", help='Model to use for generating summaries')
+    parser.add_argument('--num-threads', type=int, default=5, help='Number of questions to process in parallel')
     # parser.add_argument('--quiet', type=bool, default=False, help='Don\'t log anything - just print the response')
     args = parser.parse_args()
 
@@ -108,9 +149,6 @@ if __name__ == '__main__':
     total_token_cost = 0
     question = input("\nWhat would you like to research? ")
     filename = sanitize_filename(question) + ".md"
-    file = open(filename, "w")
-    print(f"\n\n(Output being duplicated into {filename})\n")
-    tee_print(file, f"# {question}\n")
     with yaspin(text="(Calling OpenAI to get questions)", spinner="dots", timer=True):
         response = get_openai_response(
             model=args.question_model,
@@ -125,53 +163,33 @@ if __name__ == '__main__':
     total_tokens_used += tokens
     total_token_cost += get_token_price(tokens, args.question_model, direction="output")
     data = json.loads(response_text)[:args.max_questions]
-    tee_print(file, f"\n\n## Researcher Questions:\n")
+    print(f"\n\n## Researcher Questions:\n")
     for question in data:
-        tee_print(file, f"* {question.strip()}")
+        print(f"* {question.strip()}")
 
-    for question in data:
-        question = question.strip()
-        print(f"\n(Searching for question: {question})\n")
-        unwanted_domains = ['reddit.com', 'youtube.com', 'mattermost.com']
-        for url in get_search_results(question, num_results=args.max_results):
-            for domain in unwanted_domains:
-                if domain in url:
-                    print(f"(Skipping {url} because it is a {domain} we can't handle.)")
-                    continue
-            page_text = None
-            try:
-                response = requests.get(url, timeout=30)
-                soup = BeautifulSoup(response.text, 'html.parser')
-                page_text = soup.get_text(strip=True)
-            except Exception as e:
-                print(f"(Skipping {url} because of error: {e})")
-                continue
+    summary_results = {}
+    with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
+        futures = {executor.submit(process_question, query, args.summary_model, args.max_results, args.max_page_size): (query, args.summary_model, args.max_results, args.max_page_size) for query in data}
+        for future in futures:
+            summary, tokens_used = future.result()
+            query_tuple = futures[future]
+            query, summary_model, max_results, max_page_size = query_tuple
+            summary_results[query] = {
+                "summary": summary,
+                "tokens": tokens_used
+            }
 
-            if not page_text:
-                print(f"(Skipping {url} because it has no text.)")
-                continue
-            if 'cloudflare' in page_text.lower() and 'cookies' in page_text.lower():
-                print(f"(Skipping {url} because it is a cloudflare cookie check page.)")
-                continue
-            if '403 Forbidden' in page_text.lower():
-                print(f"(Skipping {url} because it is a 403 Forbidden page.)")
-                continue
+    with open(filename, "w") as file:
+        tee_print(file, f'# {question}\n\n')
+        tee_print(file, f'## Researcher Questions:\n')
+        for question in data:
+            tee_print(file, f"* {question.strip()}")
+        tee_print(file, f'\n\n## Researcher Summaries:\n')
 
-            with yaspin(text="(Calling OpenAI for summary)", spinner="dots", timer=True):
-                response = get_openai_response(
-                    model=args.summary_model,
-                    messages=[
-                        {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a USERS text and providing a concise summary of it containing the main information contained in it with a focus on answering any points in the users question."},
-                        {"role": "user", "content": f"Hi, I am researching ''{question}''. Could you help by summarising anything useful in this text I have found? ''{page_text[:args.max_page_size]}''."},
-                    ]
-                )
-            summary = response['choices'][0]['message']['content']
-            tokens = response['usage']['total_tokens']
-            total_tokens_used += tokens
-            total_token_cost += get_token_price(tokens, args.summary_model, direction="output")
-            tee_print(file, f'\n### Summary of {url}')
-            tee_print(file, summary)
-            sleep(1)
+        for query, result in summary_results.items():
+            tee_print(file, f"### {query}")
+            tee_print(file, result['summary'])
+            total_tokens_used += result['tokens']
     file.close()
     content = ""
     with open(filename, 'r') as file:
@@ -181,8 +199,9 @@ if __name__ == '__main__':
             model=args.summary_model,
             messages=[
                 {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a list of various summaries of a users findings about websites and providing a overall summary of it containing the main information contained in it."},
-                {"role": "user", "content": content},
-            ]
+                {"role": "user", "content": f"Could you give me an overall summary of my findings about ''{question}''? Findings :: {content}"},
+            ],
+            max_tokens=8000
         )
     summary = response['choices'][0]['message']['content']
     tokens = response['usage']['total_tokens']
