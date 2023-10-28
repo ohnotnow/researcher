@@ -89,7 +89,7 @@ def get_search_results(query, num_results=5):
             link = result.get("link", None)
             if link and not 'reddit.com' in link:
                 links.append(link)
-        return links[0:num_results-1]
+        return links[:num_results]
     else:
         return search(query, num_results=num_results)
 
@@ -125,16 +125,19 @@ def process_question(question, model, max_results, max_page_size):
 
         page_text = page_text[:max_page_size]
         temp_model = model
+        temp_max_tokens = min(max_page_size, 6000)
         if len(page_text) < 3000 and '16k' in model:
             print(f"(Using gpt-3.5-turbo for {url} as the page is short.)")
             temp_model = 'gpt-3.5-turbo'
+            temp_max_tokens = min(max_page_size, 2000)
         with yaspin(text="(Calling OpenAI for summary)", spinner="dots", timer=True):
             response = get_openai_response(
                 model=temp_model,
                 messages=[
                     {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a USERS text and providing a concise summary of it containing the main information contained in it with a focus on answering any points in the users question."},
                     {"role": "user", "content": f"Hi, I am researching ''{question}''. Could you help by summarising anything useful in this text I have found? ''{page_text}''."},
-                ]
+                ],
+                max_tokens=temp_max_tokens
             )
         summary = response['choices'][0]['message']['content']
         tokens += response['usage']['total_tokens']
@@ -152,9 +155,9 @@ if __name__ == '__main__':
     parser.add_argument('--question-model', type=str, default="gpt-4", help='Model to use for generating questions')
     parser.add_argument('--summary-model', type=str, default="gpt-3.5-turbo-16k", help='Model to use for generating summaries')
     parser.add_argument('--num-threads', type=int, default=5, help='Number of questions to process in parallel')
-    parser.add_argument('--hurry', type=bool, default=False, help='Shorthand for --question-model gpt-3.5-turbo --summary-model gpt-3.5-turbo --max-questions 5 --max-results 2 --max-page-size 2000 --num-threads 5')
-    parser.add_argument('--thorough', type=bool, default=False, help='Shorthand for --question-model gpt-4 --summary-model gpt-3.5-turbo --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
-    parser.add_argument('--delux', type=bool, default=False, help='Shorthand for --question-model gpt-4 --summary-model gpt-4 --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
+    parser.add_argument('--hurry', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-3.5-turbo --summary-model gpt-3.5-turbo --max-questions 5 --max-results 2 --max-page-size 2000 --num-threads 5')
+    parser.add_argument('--thorough', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-4 --summary-model gpt-3.5-turbo --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
+    parser.add_argument('--delux', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-4 --summary-model gpt-4 --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
     # parser.add_argument('--quiet', type=bool, default=False, help='Don\'t log anything - just print the response')
     args = parser.parse_args()
 
@@ -170,11 +173,15 @@ if __name__ == '__main__':
         args.max_results = 10
         args.max_page_size = 8000
         args.num_threads = 5
+        args.question_model = "gpt-4"
+        args.summary_model = "gpt-3.5-turbo-16k"
     if args.hurry:
         args.max_questions = 5
         args.max_results = 2
-        args.max_page_size = 1000
+        args.max_page_size = 2000
         args.num_threads = 5
+        args.question_model = "gpt-3.5-turbo"
+        args.summary_model = "gpt-3.5-turbo"
 
     total_tokens_used = 0
     total_token_cost = 0
@@ -195,8 +202,8 @@ if __name__ == '__main__':
     total_token_cost += get_token_price(tokens, args.question_model, direction="output")
     data = json.loads(response_text)[:args.max_questions]
     print(f"\n\n## Researcher Questions:\n")
-    for question in data:
-        print(f"* {question.strip()}")
+    for researcher_question in data:
+        print(f"* {researcher_question.strip()}")
 
     summary_results = {}
     with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
@@ -204,8 +211,8 @@ if __name__ == '__main__':
         for future in futures:
             summary, tokens_used = future.result()
             query_tuple = futures[future]
-            query, summary_model, max_results, max_page_size = query_tuple
-            summary_results[query] = {
+            query_question, summary_model, max_results, max_page_size = query_tuple
+            summary_results[query_question] = {
                 "summary": summary,
                 "tokens": tokens_used
             }
@@ -213,18 +220,22 @@ if __name__ == '__main__':
     with open(filename, "w") as file:
         tee_print(file, f'# {question}\n\n')
         tee_print(file, f'## Researcher Questions:\n')
-        for question in data:
-            tee_print(file, f"* {question.strip()}")
+        for researcher_question in data:
+            tee_print(file, f"* {researcher_question.strip()}")
         tee_print(file, f'\n\n## Researcher Summaries:\n')
 
-        for query, result in summary_results.items():
-            tee_print(file, f"### {query}")
+        for query_question, result in summary_results.items():
+            tee_print(file, f"### {query_question}")
             tee_print(file, result['summary'])
             total_tokens_used += result['tokens']
     file.close()
     content = ""
     with open(filename, 'r') as file:
         content = file.read(args.max_page_size)
+    if args.summary_model != "gpt-3.5-turbo":
+        max_tokens = 6000
+    else:
+        max_tokens = 2000
     with yaspin(text="(Calling OpenAI for overall summary)", spinner="dots", timer=True):
         response = get_openai_response(
             model=args.summary_model,
@@ -232,7 +243,7 @@ if __name__ == '__main__':
                 {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a list of various summaries of a users findings about websites and providing a readable summary of it containing the main information contained in it."},
                 {"role": "user", "content": f"Could you extract the important points from my findings about ''{question}''? Please give a thorough summary and point out any key points. Findings :: {content}"},
             ],
-            max_tokens=8000
+            max_tokens=max_tokens
         )
     summary = response['choices'][0]['message']['content']
     tokens = response['usage']['total_tokens']
