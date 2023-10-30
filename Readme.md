@@ -4,6 +4,8 @@ Researcher is a Python script that generates a list of search queries based on a
 
 You can see an example run in [example_output.md](example_output.md).
 
+It currently handles basic plain-text/html pages, pdf's and youtube videos (if a transcript is available).
+
 ## Installation (Native)
 
 1. Clone the repository: `git clone https://github.com:ohnotnow/researcher.git`

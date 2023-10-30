@@ -1,12 +1,14 @@
 import os
 import json
 from time import sleep
+from io import BytesIO
 import pytz
 import requests
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 import openai
 from bs4 import BeautifulSoup
+import PyPDF2
 from youtube_transcript_api import YouTubeTranscriptApi
 import PyPDF2
 from trafilatura import fetch_url, extract
@@ -99,7 +101,7 @@ def get_search_results(query, num_results=5):
 def process_question(question, model, max_results, max_page_size):
     question = question.strip()
     print(f"\n(Searching for question: {question})\n")
-    unwanted_domains = ['reddit.com', 'youtube.com', 'mattermost.com']
+    unwanted_domains = ['reddit.com', 'quora.com', 'mattermost.com']
     question_results = ""
     tokens = 0
     for url in get_search_results(question, num_results=max_results):
@@ -109,9 +111,14 @@ def process_question(question, model, max_results, max_page_size):
                 continue
         page_text = None
         try:
-            response = requests.get(url, timeout=30)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            page_text = soup.get_text(strip=True)
+            if 'youtube.com' in url:
+                page_text = get_text_from_youtube(url)
+            elif url.endswith('.pdf'):
+                page_text = get_text_from_pdf(url)
+            else:
+                response = requests.get(url, timeout=30)
+                soup = BeautifulSoup(response.text, 'html.parser')
+                page_text = soup.get_text(strip=True)
         except Exception as e:
             print(f"(Skipping {url} because of error: {e})")
             continue
@@ -149,6 +156,31 @@ def process_question(question, model, max_results, max_page_size):
         question_results = question_results + f"\n\n### {url}\n\n{summary}"
         sleep(1)
     return question_results, tokens
+
+def get_text_from_pdf(url: str) -> str:
+    try:
+        response = requests.get(url)
+        file = BytesIO(response.content)
+        pdf_reader = PyPDF2.PdfReader(file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text() + "\n"
+        return text
+    except Exception as e:
+        print(f"Could not get pdf text for {url}")
+        print(e)
+        return ""
+
+def get_text_from_youtube(url: str, fallback_audio=False) -> str:
+    video_id = url.split('watch?v=')[-1]
+    text = ""
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        transcript = transcript_list.find_transcript(['en'])
+        text = " ".join([i['text'] for i in transcript.fetch()])
+    except:
+        print(f"Could not get transcript for {url}")
+    return text
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Whatever')
