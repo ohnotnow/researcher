@@ -52,13 +52,13 @@ def tee_print(file, *args, **kwargs):
     print(*args, **kwargs)
     print(*args, **kwargs, file=file)
 
-def get_openai_response(model, messages, max_tokens=1000):
+def get_openai_response(model, messages, max_tokens=1000, timeout=60, asking_for_questions=False):
     max_tries = 3
     tries = 0
     while tries < max_tries:
         try:
             return openai.ChatCompletion.create(
-                request_timeout=30,
+                request_timeout=timeout,
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
@@ -68,8 +68,10 @@ def get_openai_response(model, messages, max_tokens=1000):
             print(f"(Error while talking to OpenAI : {e}")
             print(f"(Retrying in {tries * 5} second(s))")
             sleep(tries * 5)
-    print(f"(Multiple errors while talking to OpenAI - aborting)")
-    exit(1)
+    print(f"(Multiple errors while talking to OpenAI - skipping this call)")
+    if asking_for_questions:
+        print("Aborting...")
+        exit(1)
 
 def get_search_results(query, num_results=5):
     if serper_api_key:
@@ -148,7 +150,7 @@ def process_question(question, model, max_results, max_page_size):
         sleep(1)
     return question_results, tokens
 
-if __name__ == '__main__':
+def parse_arguments():
     parser = argparse.ArgumentParser(description='Whatever')
     parser.add_argument('--max-questions', type=int, default=10, help='Maximum number of questions to look up via google')
     parser.add_argument('--max-results', type=int, default=5, help='Maximum number of results to return per question')
@@ -156,6 +158,7 @@ if __name__ == '__main__':
     parser.add_argument('--question-model', type=str, default="gpt-4", help='Model to use for generating questions')
     parser.add_argument('--summary-model', type=str, default="gpt-3.5-turbo-16k", help='Model to use for generating summaries')
     parser.add_argument('--num-threads', type=int, default=5, help='Number of questions to process in parallel')
+    parser.add_argument('--openai_timeout', type=int, default=60, help='Number of seconds to wait for a response from the OpenAI API')
     parser.add_argument('--hurry', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-3.5-turbo --summary-model gpt-3.5-turbo --max-questions 5 --max-results 2 --max-page-size 2000 --num-threads 5')
     parser.add_argument('--thorough', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-4 --summary-model gpt-3.5-turbo --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
     parser.add_argument('--delux', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-4 --summary-model gpt-4 --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
@@ -184,17 +187,40 @@ if __name__ == '__main__':
         args.question_model = "gpt-3.5-turbo"
         args.summary_model = "gpt-3.5-turbo"
 
+    return args
+
+if __name__ == '__main__':
+    args = parse_arguments()
     total_tokens_used = 0
     total_token_cost = 0
     question = input("\nWhat would you like to research? ")
     filename = sanitize_filename(question) + ".md"
+    with yaspin(text="(Calling OpenAI to get initial summary)", spinner="dots", timer=True):
+        response = get_openai_response(
+            model=args.question_model,
+            messages=[
+                {"role": "system", "content": "You are a helpful AI assistant who specialised in giving concise overviews of a topic the USER is trying to research."},
+                {"role": "user", "content": f"I am looking to research the following question, could you give me a short response of your thoughts on it? Q :: {question}"},
+            ],
+            timeout=args.openai_timeout,
+        )
+
+    gpt_thoughts = response['choices'][0]['message']['content']
+    tokens = response['usage']['total_tokens']
+    total_tokens_used += tokens
+    total_token_cost += get_token_price(tokens, args.summary_model, direction="output")
+    print(f"\n\n## Initial Summary:\n")
+    print(gpt_thoughts)
+
     with yaspin(text="(Calling OpenAI to get questions)", spinner="dots", timer=True):
         response = get_openai_response(
             model=args.question_model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
-            ]
+                {"role": "user", "content": f"I am looking to research the following topic :: {question}"},
+            ],
+            timeout=args.openai_timeout,
+            asking_for_questions=True,
         )
 
     response_text = response['choices'][0]['message']['content']
@@ -220,6 +246,8 @@ if __name__ == '__main__':
 
     with open(filename, "w") as file:
         tee_print(file, f'# {question}\n\n')
+        tee_print(file, f'## Initial Summary:\n')
+        tee_print(file, f"{gpt_thoughts}\n\n")
         tee_print(file, f'## Researcher Questions:\n')
         for researcher_question in data:
             tee_print(file, f"* {researcher_question.strip()}")
@@ -244,7 +272,8 @@ if __name__ == '__main__':
                 {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a list of various summaries of a users findings about websites and providing a readable summary of it containing the main information contained in it."},
                 {"role": "user", "content": f"Could you extract the important points from my findings about ''{question}''? Please give a thorough summary and point out any key points. Findings :: {content}"},
             ],
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            timeout=args.openai_timeout,
         )
     summary = response['choices'][0]['message']['content']
     tokens = response['usage']['total_tokens']
