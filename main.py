@@ -158,7 +158,7 @@ def parse_arguments():
     parser.add_argument('--question-model', type=str, default="gpt-4", help='Model to use for generating questions')
     parser.add_argument('--summary-model', type=str, default="gpt-3.5-turbo-16k", help='Model to use for generating summaries')
     parser.add_argument('--num-threads', type=int, default=5, help='Number of questions to process in parallel')
-    parser.add_argument('--openai_timeout', type=int, default=60, help='Number of seconds to wait for a response from the OpenAI API')
+    parser.add_argument('--openai-timeout', type=int, default=60, help='Number of seconds to wait for a response from the OpenAI API')
     parser.add_argument('--hurry', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-3.5-turbo --summary-model gpt-3.5-turbo --max-questions 5 --max-results 2 --max-page-size 2000 --num-threads 5')
     parser.add_argument('--thorough', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-4 --summary-model gpt-3.5-turbo --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
     parser.add_argument('--delux', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-4 --summary-model gpt-4 --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
