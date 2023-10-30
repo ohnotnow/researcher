@@ -58,6 +58,7 @@ def get_openai_response(model, messages, max_tokens=1000):
     while tries < max_tries:
         try:
             return openai.ChatCompletion.create(
+                request_timeout=30,
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
@@ -65,8 +66,8 @@ def get_openai_response(model, messages, max_tokens=1000):
         except Exception as e:
             tries += 1
             print(f"(Error while talking to OpenAI : {e}")
-            print(f"(Retrying in {tries} second(s))")
-            sleep(tries)
+            print(f"(Retrying in {tries * 5} second(s))")
+            sleep(tries * 5)
     print(f"(Multiple errors while talking to OpenAI - aborting)")
     exit(1)
 
