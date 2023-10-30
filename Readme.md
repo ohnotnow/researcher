@@ -1,6 +1,8 @@
 # Researcher
 
-Researcher is a Python script that generates a list of search queries based on a specific query or problem. It uses OpenAI's GPT-4 and GPT-3.5-turbo-16k models to generate comprehensive and counterfactual search queries. It also fetches and parses web pages, and provides a concise summary of the main information contained in them.
+Researcher is a Python script that generates a list of search queries based on a specific query or problem. It uses OpenAI's GPT-4 and GPT-3.5-turbo-16k models to generate comprehensive and counterfactual search queries. It then searches google for those queries summarises the content. Finally it does an overall summary of all the findings.
+
+You can see an example run in [example_output.md](example_output.md).
 
 ## Installation (Native)
 

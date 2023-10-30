@@ -3,4 +3,6 @@
 results/*.md
 *.md
 !Readme.md
+!example_output.md
+
 
