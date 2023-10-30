@@ -52,3 +52,7 @@ Contributions are welcome! If you find a bug or have a feature request, please o
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Kudos
+
+I had the idea to implement this after watching David Shapiro's youtube video here https://www.youtube.com/watch?v=N8p6u1OtARs - so props to him!
