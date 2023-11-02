@@ -4,6 +4,7 @@ from time import sleep
 from io import BytesIO
 import pytz
 import requests
+from random import shuffle
 from enum import Enum
 from concurrent.futures import ThreadPoolExecutor
 import openai
@@ -24,6 +25,7 @@ system_prompt = """
 # MISSION
 You are a search query generator. You will be given a specific query or problem by the USER and you are to generate
 a plain JSON array of a list of questions that will be used to search the internet.
+Make sure your resonse is a VALID JSON array of strings.
 Make sure you generate comprehensive and counterfactual search queries.
 Employ everything you know about information foraging and information literacy to generate the best possible questions.
 """
@@ -194,6 +196,7 @@ def parse_arguments():
     parser.add_argument('--hurry', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-3.5-turbo --summary-model gpt-3.5-turbo --max-questions 5 --max-results 2 --max-page-size 2000 --num-threads 5')
     parser.add_argument('--thorough', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-4 --summary-model gpt-3.5-turbo --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
     parser.add_argument('--delux', type=bool, default=False, action=argparse.BooleanOptionalAction, help='Shorthand for --question-model gpt-4 --summary-model gpt-4 --max-questions 10 --max-results 10 --max-page-size 8000 --num-threads 5')
+    parser.add_argument('--loops', type=int, default=1, help='Number of loops to run to refine the results')
     # parser.add_argument('--quiet', type=bool, default=False, help='Don\'t log anything - just print the response')
     args = parser.parse_args()
 
@@ -222,6 +225,7 @@ def parse_arguments():
     return args
 
 if __name__ == '__main__':
+    question_list = []
     args = parse_arguments()
     total_tokens_used = 0
     total_token_cost = 0
@@ -244,80 +248,101 @@ if __name__ == '__main__':
     print(f"\n\n## Initial Summary:\n")
     print(gpt_thoughts)
 
-    with yaspin(text="(Calling OpenAI to get questions)", spinner="dots", timer=True):
-        response = get_openai_response(
-            model=args.question_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"I am looking to research the following topic :: {question}"},
-            ],
-            timeout=args.openai_timeout,
-            asking_for_questions=True,
-        )
+    loop_count = 0
+    while loop_count < args.loops:
+        messages = []
+        user_message = f"I am looking to research the following topic :: {question}"
+        if loop_count > 0:
+            user_message += f" ::  I have already researched the following :: " + "; ".join(question_list)
+        messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_message})
+        response = None
+        with yaspin(text="(Calling OpenAI to get questions)", spinner="dots", timer=True):
+            response = get_openai_response(
+                model=args.question_model,
+                messages=messages,
+                timeout=args.openai_timeout,
+                asking_for_questions=True,
+            )
 
-    response_text = response['choices'][0]['message']['content']
-    tokens = response['usage']['total_tokens']
-    total_tokens_used += tokens
-    total_token_cost += get_token_price(tokens, args.question_model, direction="output")
-    data = json.loads(response_text)[:args.max_questions]
-    print(f"\n\n## Researcher Questions:\n")
-    for researcher_question in data:
-        print(f"* {researcher_question.strip()}")
-
-    summary_results = {}
-    with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
-        futures = {executor.submit(process_question, query, args.summary_model, args.max_results, args.max_page_size): (query, args.summary_model, args.max_results, args.max_page_size) for query in data}
-        for future in futures:
-            summary, tokens_used = future.result()
-            query_tuple = futures[future]
-            query_question, summary_model, max_results, max_page_size = query_tuple
-            summary_results[query_question] = {
-                "summary": summary,
-                "tokens": tokens_used
-            }
-
-    with open(filename, "w") as file:
-        tee_print(file, f'# {question}\n\n')
-        tee_print(file, f'## Initial Summary:\n')
-        tee_print(file, f"{gpt_thoughts}\n\n")
-        tee_print(file, f'## Researcher Questions:\n')
+        response_text = response['choices'][0]['message']['content']
+        if response_text is None:
+            print("Response text is none")
+            exit(1)
+        tokens = response['usage']['total_tokens']
+        total_tokens_used += tokens
+        total_token_cost += get_token_price(tokens, args.question_model, direction="output")
+        try:
+            data = json.loads(response_text)
+            shuffle(data)
+            data = data[:args.max_questions]
+        except Exception as e:
+            print(f"Could not parse response from OpenAI: {response_text}")
+            print(f"Error: {e}")
+            print(f"System prompt was : {system_prompt}")
+            print(f"Max questions : {args.max_questions}")
+            print(f"response['usage']: {response.get('usage', 'Key does not exist or is None')}")
+            print(f"response['usage']['total_tokens']: {response.get('usage', {}).get('total_tokens', 'Key does not exist or is None')}")
+            exit(1)
+        print(f"\n\n## Researcher Questions:\n")
         for researcher_question in data:
-            tee_print(file, f"* {researcher_question.strip()}")
-        tee_print(file, f'\n\n## Researcher Summaries:\n')
+            print(f"* {researcher_question.strip()}")
+            question_list.append(researcher_question.strip())
 
-        for query_question, result in summary_results.items():
-            tee_print(file, f"### {query_question}")
-            tee_print(file, result['summary'])
-            total_tokens_used += result['tokens']
-    file.close()
-    content = ""
-    with open(filename, 'r') as file:
-        content = file.read(args.max_page_size)
-    if args.summary_model != "gpt-3.5-turbo":
-        max_tokens = 6000
-    else:
-        max_tokens = 2000
-    with yaspin(text="(Calling OpenAI for overall summary)", spinner="dots", timer=True):
-        response = get_openai_response(
-            model=args.summary_model,
-            messages=[
-                {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a list of various summaries of a users findings about websites and providing a readable summary of it containing the main information contained in it."},
-                {"role": "user", "content": f"Could you extract the important points from my findings about ''{question}''? Please give a thorough summary and point out any key points. Findings :: {content}"},
-            ],
-            max_tokens=max_tokens,
-            timeout=args.openai_timeout,
-        )
-    summary = response['choices'][0]['message']['content']
-    tokens = response['usage']['total_tokens']
-    total_tokens_used += tokens
-    total_token_cost += get_token_price(total_tokens_used, args.summary_model, direction="output")
-    file = open(filename, "a")
-    tee_print(file, f'\n## Overall Summary')
-    tee_print(file, summary)
-    tee_print(file, f'\n\n### Usage')
-    tee_print(file, f'* Total tokens used: {total_tokens_used}')
-    tee_print(file, f'* Total cost (est): ${round(total_token_cost, 2)}\n\n')
+        summary_results = {}
+        with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
+            futures = {executor.submit(process_question, query, args.summary_model, args.max_results, args.max_page_size): (query, args.summary_model, args.max_results, args.max_page_size) for query in data}
+            for future in futures:
+                summary, tokens_used = future.result()
+                query_tuple = futures[future]
+                query_question, summary_model, max_results, max_page_size = query_tuple
+                summary_results[query_question] = {
+                    "summary": summary,
+                    "tokens": tokens_used
+                }
 
-    file.close()
+        with open(filename, "a") as file:
+            tee_print(file, f'\n\n# {question}\n\n')
+            tee_print(file, f'## Initial Summary:\n')
+            tee_print(file, f"{gpt_thoughts}\n\n")
+            tee_print(file, f'## Researcher Questions:\n')
+            for researcher_question in data:
+                tee_print(file, f"* {researcher_question.strip()}")
+            tee_print(file, f'\n\n## Researcher Summaries:\n')
+
+            for query_question, result in summary_results.items():
+                tee_print(file, f"### {query_question}")
+                tee_print(file, result['summary'])
+                total_tokens_used += result['tokens']
+        file.close()
+        content = ""
+        with open(filename, 'r') as file:
+            content = file.read(args.max_page_size)
+        if args.summary_model != "gpt-3.5-turbo":
+            max_tokens = 6000
+        else:
+            max_tokens = 2000
+        with yaspin(text="(Calling OpenAI for overall summary)", spinner="dots", timer=True):
+            response = get_openai_response(
+                model=args.summary_model,
+                messages=[
+                    {"role": "system", "content": "You are a helpful AI assistant who specialises in reading a list of various summaries of a users findings about websites and providing a readable summary of it containing the main information contained in it."},
+                    {"role": "user", "content": f"Could you extract the important points from my findings about ''{question}''? Please give a thorough summary and point out any key points. Findings :: {content}"},
+                ],
+                max_tokens=max_tokens,
+                timeout=args.openai_timeout,
+            )
+        summary = response['choices'][0]['message']['content']
+        tokens = response['usage']['total_tokens']
+        total_tokens_used += tokens
+        total_token_cost += get_token_price(total_tokens_used, args.summary_model, direction="output")
+        file = open(filename, "a")
+        tee_print(file, f'\n## Overall Summary')
+        tee_print(file, summary)
+        tee_print(file, f'\n\n### Usage')
+        tee_print(file, f'* Total tokens used: {total_tokens_used}')
+        tee_print(file, f'* Total cost (est): ${round(total_token_cost, 2)}\n\n')
+        file.close()
+        loop_count += 1
 
     print(f"\n\n(Output saved to {filename})\n")
